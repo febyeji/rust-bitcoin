@@ -16,6 +16,7 @@ use super::serialize::{Deserialize, Serialize};
 use crate::consensus::encode::{
     self, deserialize, serialize, Decodable, Encodable, ReadExt, WriteExt, MAX_VEC_SIZE,
 };
+use crate::consensus::parse_failed_error;
 use crate::prelude::{DisplayHex, Vec};
 use crate::psbt::Error;
 
@@ -66,6 +67,16 @@ impl fmt::Display for Key {
     }
 }
 
+/// Returns the number of bytes needed to encode `n` as a Bitcoin compact size.
+fn compact_size_len(n: u64) -> usize {
+    match n {
+        0..=0xFC => 1,
+        0xFD..=0xFFFF => 3,
+        0x1_0000..=0xFFFF_FFFF => 5,
+        _ => 9,
+    }
+}
+
 impl Key {
     pub(crate) fn decode<R: BufRead + ?Sized>(r: &mut R) -> Result<Self, Error> {
         let byte_size = r.read_compact_size()?;
@@ -74,7 +85,17 @@ impl Key {
             return Err(Error::NoMorePairs);
         }
 
-        let key_byte_size: u64 = byte_size - 1;
+        let type_value = r.read_compact_size()?;
+        let type_value_len = compact_size_len(type_value) as u64;
+
+        if byte_size < type_value_len {
+            return Err(parse_failed_error(
+                "PSBT key length shorter than compact size encoding of type value",
+            )
+            .into());
+        }
+
+        let key_byte_size = byte_size - type_value_len;
 
         if key_byte_size > MAX_VEC_SIZE.to_u64() {
             return Err(encode::Error::Parse(encode::ParseError::OversizedVectorAllocation {
@@ -83,8 +104,6 @@ impl Key {
             })
             .into());
         }
-
-        let type_value = r.read_compact_size()?;
 
         let mut key_data = Vec::with_capacity(key_byte_size as usize);
         for _ in 0..key_byte_size {
@@ -98,7 +117,8 @@ impl Key {
 impl Serialize for Key {
     fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.emit_compact_size(self.key_data.len() + 1).expect("in-memory writers don't error");
+        buf.emit_compact_size(self.key_data.len() + compact_size_len(self.type_value))
+            .expect("in-memory writers don't error");
 
         buf.emit_compact_size(self.type_value).expect("in-memory writers don't error");
 
@@ -206,5 +226,80 @@ impl<'a> Arbitrary<'a> for ProprietaryKey {
 impl<'a> Arbitrary<'a> for Key {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         Ok(Self { type_value: u.arbitrary()?, key_data: Vec::<u8>::arbitrary(u)? })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_roundtrip(type_value: u64, key_data: Vec<u8>) {
+        let key = Key { type_value, key_data };
+        let serialized = key.serialize();
+        let mut cursor = io::Cursor::new(&serialized);
+        let deserialized = Key::decode(&mut cursor).expect("roundtrip decode failed");
+        assert_eq!(key, deserialized);
+    }
+
+    #[test]
+    fn key_roundtrip_small_type() {
+        // type_value = 0x0F uses 1-byte compact size encoding.
+        key_roundtrip(0x0F, vec![0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn key_roundtrip_large_type() {
+        // type_value = 0xFD (253) uses 3-byte compact size encoding.
+        key_roundtrip(0xFD, vec![0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn key_roundtrip_very_large_type() {
+        // type_value = 0x10000 uses 5-byte compact size encoding.
+        key_roundtrip(0x1_0000, vec![0xFF]);
+    }
+
+    #[test]
+    fn key_roundtrip_boundary_type() {
+        // type_value = 0xFC (252) is the last value using 1-byte compact size encoding.
+        // 0xFD (253) is the first to use 3-byte encoding. Test the boundary.
+        key_roundtrip(0xFC, vec![0x01, 0x02]);
+    }
+
+    #[test]
+    fn key_decode_keylen_too_short_for_type() {
+        // Hand-craft bytes where keylen = 1 but type_value starts with 0xFD prefix,
+        // which requires 3 bytes. The declared key length is inconsistent.
+        //   keylen = 1 (compact size: 0x01)
+        //   type_value encoding: 0xFD, 0xFD, 0x00 (253 as compact size)
+        let bytes: Vec<u8> = vec![0x01, 0xFD, 0xFD, 0x00];
+        let mut cursor = io::Cursor::new(&bytes);
+        let result = Key::decode(&mut cursor);
+        assert!(result.is_err(), "should fail when keylen is shorter than type encoding");
+    }
+
+    #[test]
+    fn key_serialize_large_type_has_correct_keylen() {
+        // type_value = 0xFD (253) needs 3 bytes for compact size encoding.
+        // With 3 bytes of key_data, keylen should be 3 + 3 = 6, not 3 + 1 = 4.
+        let key = Key { type_value: 0xFD, key_data: vec![0x01, 0x02, 0x03] };
+        let serialized = key.serialize();
+        // First byte is keylen encoded as compact size; 6 < 253 so it's a single byte.
+        assert_eq!(serialized[0], 6);
+    }
+
+    #[test]
+    fn key_decode_correctly_encoded_large_type() {
+        // Hand-craft correctly encoded bytes for type_value=0xFD, key_data=[0x01, 0x02, 0x03]:
+        //   keylen = 6 (compact size: 0x06)
+        //   type_value = 253 (compact size: 0xFD, 0xFD, 0x00)
+        //   key_data = [0x01, 0x02, 0x03]
+        let bytes: Vec<u8> = vec![0x06, 0xFD, 0xFD, 0x00, 0x01, 0x02, 0x03];
+        let mut cursor = io::Cursor::new(&bytes);
+        let key = Key::decode(&mut cursor).expect("decode failed");
+        assert_eq!(key.type_value, 0xFD);
+        assert_eq!(key.key_data, vec![0x01, 0x02, 0x03]);
+        // Verify entire input was consumed.
+        assert_eq!(cursor.position() as usize, bytes.len());
     }
 }
