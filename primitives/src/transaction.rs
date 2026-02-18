@@ -2620,4 +2620,40 @@ mod tests {
         let err = decoder.end().unwrap_err();
         assert_eq!(err, TransactionDecoderError(TransactionDecoderErrorInner::NoOutputs));
     }
+
+    #[test]
+    #[cfg(all(feature = "alloc", feature = "hex"))]
+    fn reject_negative_output_value() {
+        // Test vector taken from Bitcoin Core tx_invalid.json
+        // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L40
+        // "Negative output"
+        // Output value is 0xFFFFFFFFFFFFFFFF (u64::MAX), which exceeds MAX_MONEY.
+        let tx_bytes = hex!("01000000010001000000000000000000000000000000000000000000000000000000000000000000006d4830450220063222cbb128731fc09de0d7323746539166544d6c1df84d867ccea84bcc8903022100bf568e8552844de664cd41648a031554327aa8844af34b4f27397c65b92c04de0123210243ec37dee0e2e053a9c976f43147e79bc7d9dc606ea51010af1ac80db6b069e1acffffffff01ffffffffffffffff015100000000");
+
+        let mut decoder = Transaction::decoder();
+        let mut slice = tx_bytes.as_slice();
+        let result = decoder.push_bytes(&mut slice);
+        assert!(result.is_err(), "output value of u64::MAX should be rejected during decoding");
+    }
+
+    #[test]
+    #[cfg(all(feature = "alloc", feature = "hex"))]
+    fn reject_null_prevout_at_index_1() {
+        // Test vector taken from Bitcoin Core tx_invalid.json
+        // https://github.com/bitcoin/bitcoin/blob/master/src/test/data/tx_invalid.json#L68
+        // "Null txin, but without being a coinbase (because there are two inputs)"
+        // Same rule as reject_null_prevout_in_non_coinbase_transaction, but the null
+        // prevout is at index 1 instead of index 0.
+        let tx_bytes = hex!("010000000200010000000000000000000000000000000000000000000000000000000000000000000000ffffffff0000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff010000000000000000015100000000");
+
+        let mut decoder = Transaction::decoder();
+        let mut slice = tx_bytes.as_slice();
+        decoder.push_bytes(&mut slice).unwrap();
+        let err = decoder.end().expect_err("null prevout at index 1 in non-coinbase tx should be rejected");
+
+        assert_eq!(
+            err,
+            TransactionDecoderError(TransactionDecoderErrorInner::NullPrevoutInNonCoinbase(1))
+        );
+    }
 }
