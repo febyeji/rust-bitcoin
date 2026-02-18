@@ -19,6 +19,8 @@ extern crate std;
 
 mod decode;
 mod encode;
+#[cfg(kani)]
+mod verification;
 
 pub use self::decode::decoders::{
     ArrayDecoder, CompactSizeDecoder, CompactSizeDecoderError, Decoder2, Decoder2Error, Decoder3,

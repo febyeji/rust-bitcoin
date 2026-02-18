@@ -2,6 +2,9 @@
 
 //! Implements `FeeRate` and associated features.
 
+#[cfg(kani)]
+mod verification;
+
 #[cfg(feature = "serde")]
 pub mod serde;
 
@@ -25,10 +28,14 @@ mod encapsulate {
 
     impl FeeRate {
         /// Constructs a new [`FeeRate`] from satoshis per 1,000,000 virtual bytes.
-        pub(crate) const fn from_sat_per_mvb(sat_mvb: u64) -> Self { Self(sat_mvb) }
+        pub(crate) const fn from_sat_per_mvb(sat_mvb: u64) -> Self {
+            Self(sat_mvb)
+        }
 
         /// Converts to sat/MvB.
-        pub(crate) const fn to_sat_per_mvb(self) -> u64 { self.0 }
+        pub(crate) const fn to_sat_per_mvb(self) -> u64 {
+            self.0
+        }
     }
 }
 #[doc(inline)]
@@ -103,22 +110,34 @@ impl FeeRate {
     }
 
     /// Converts to sat/kwu rounding down.
-    pub const fn to_sat_per_kwu_floor(self) -> u64 { self.to_sat_per_mvb() / 4_000 }
+    pub const fn to_sat_per_kwu_floor(self) -> u64 {
+        self.to_sat_per_mvb() / 4_000
+    }
 
     /// Converts to sat/kwu rounding up.
-    pub const fn to_sat_per_kwu_ceil(self) -> u64 { self.to_sat_per_mvb().div_ceil(4_000) }
+    pub const fn to_sat_per_kwu_ceil(self) -> u64 {
+        self.to_sat_per_mvb().div_ceil(4_000)
+    }
 
     /// Converts to sat/vB rounding down.
-    pub const fn to_sat_per_vb_floor(self) -> u64 { self.to_sat_per_mvb() / 1_000_000 }
+    pub const fn to_sat_per_vb_floor(self) -> u64 {
+        self.to_sat_per_mvb() / 1_000_000
+    }
 
     /// Converts to sat/vB rounding up.
-    pub const fn to_sat_per_vb_ceil(self) -> u64 { self.to_sat_per_mvb().div_ceil(1_000_000) }
+    pub const fn to_sat_per_vb_ceil(self) -> u64 {
+        self.to_sat_per_mvb().div_ceil(1_000_000)
+    }
 
     /// Converts to sat/kvb rounding down.
-    pub const fn to_sat_per_kvb_floor(self) -> u64 { self.to_sat_per_mvb() / 1_000 }
+    pub const fn to_sat_per_kvb_floor(self) -> u64 {
+        self.to_sat_per_mvb() / 1_000
+    }
 
     /// Converts to sat/kvb rounding up.
-    pub const fn to_sat_per_kvb_ceil(self) -> u64 { self.to_sat_per_mvb().div_ceil(1_000) }
+    pub const fn to_sat_per_kvb_ceil(self) -> u64 {
+        self.to_sat_per_mvb().div_ceil(1_000)
+    }
 
     /// Checked multiplication.
     ///
@@ -191,7 +210,9 @@ impl FeeRate {
     /// This is equivalent to `Self::mul_by_weight(weight).ok()`.
     #[must_use]
     #[deprecated(since = "1.0.0-rc.0", note = "use `to_fee()` instead")]
-    pub fn fee_wu(self, weight: Weight) -> Option<Amount> { self.mul_by_weight(weight).ok() }
+    pub fn fee_wu(self, weight: Weight) -> Option<Amount> {
+        self.mul_by_weight(weight).ok()
+    }
 
     /// Calculates the fee by multiplying this fee rate by weight, in virtual bytes, returning [`None`]
     /// if `vb` cannot be represented as [`Weight`].
@@ -200,7 +221,9 @@ impl FeeRate {
     /// [`Self::to_fee`].
     #[must_use]
     #[deprecated(since = "1.0.0-rc.0", note = "use Weight::from_vb and then `to_fee()` instead")]
-    pub fn fee_vb(self, vb: u64) -> Option<Amount> { Weight::from_vb(vb).map(|w| self.to_fee(w)) }
+    pub fn fee_vb(self, vb: u64) -> Option<Amount> {
+        Weight::from_vb(vb).map(|w| self.to_fee(w))
+    }
 
     /// Checked weight multiplication.
     ///
